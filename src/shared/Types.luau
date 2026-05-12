@@ -70,4 +70,10 @@ export type RoleChangedPayload = {
 	role: string,
 }
 
+-- ProfileReady payload fired from server → client once the DataStore profile
+-- has fully loaded and is safe to request via GetProfile.
+export type ProfileReadyPayload = {
+	userId: number, -- mirrors the local player's UserId for client-side validation
+}
+
 return {}

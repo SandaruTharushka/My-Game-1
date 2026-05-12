@@ -37,6 +37,11 @@ export type GameConfigType = {
 
 	-- Maintenance sweep interval for in-memory rate-limit records
 	RATELIMIT_SWEEP_INTERVAL: number,
+
+	-- Profile-ready handshake
+	PROFILE_READY_TIMEOUT: number,    -- seconds client waits for ProfileReady before fallback fetch
+	PROFILE_FETCH_RETRIES: number,    -- InvokeServer attempts if nil is returned
+	PROFILE_FETCH_RETRY_DELAY: number, -- seconds between retry attempts
 }
 
 local GameConfig: GameConfigType = {
@@ -68,6 +73,10 @@ local GameConfig: GameConfigType = {
 	},
 
 	RATELIMIT_SWEEP_INTERVAL = 300, -- seconds (5 min)
+
+	PROFILE_READY_TIMEOUT = 30,     -- generous; DataStore + lock typically < 5 s
+	PROFILE_FETCH_RETRIES = 3,
+	PROFILE_FETCH_RETRY_DELAY = 1,
 }
 
 return GameConfig

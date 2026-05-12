@@ -27,6 +27,10 @@ local RoleService = require(script.Services.RoleService)
 
 local log = Logger.new("Bootstrap")
 
+-- Tracks players whose ProfileReady has already been fired.
+-- Prevents double-firing in edge cases (e.g. rapid Studio test runs).
+local readyPlayers: { [number]: boolean } = {}
+
 -- ─── 1. Remotes ───────────────────────────────────────────────────────────────
 
 local remotes = Remotes.server()
@@ -69,17 +73,41 @@ local function onPlayerAdded(player: Player)
 		return
 	end
 
+	-- Guard: if the player left while the DataStore was loading, abort silently.
+	-- player.Parent is nil once the player has been removed from the game.
+	if player.Parent == nil then
+		log:warn("Player left during profile load; skipping ProfileReady", { userId = player.UserId })
+		return
+	end
+
+	-- Duplicate-fire guard — should never trigger in production, but Studio fast-
+	-- restart can cause PlayerAdded to fire more than once per UserId.
+	if readyPlayers[player.UserId] then
+		log:warn("ProfileReady already fired for player; skipping duplicate", { userId = player.UserId })
+		return
+	end
+	readyPlayers[player.UserId] = true
+
 	-- Register the player's saved role into the occupancy tracker.
 	RoleService.registerPlayer(player, state.data.role)
 
 	-- Push the initial role to the client HUD.
 	remotes.RoleChanged:FireClient(player, { role = state.data.role } :: Types.RoleChangedPayload)
 
-	log:info("Player ready", { userId = player.UserId, role = state.data.role, coins = state.data.coins })
+	-- Signal the client that the profile is fully loaded and safe to fetch.
+	-- The client waits for this event before calling GetProfile:InvokeServer().
+	remotes.ProfileReady:FireClient(player, { userId = player.UserId } :: Types.ProfileReadyPayload)
+
+	log:info("Player ready", {
+		userId = player.UserId,
+		role = state.data.role,
+		coins = state.data.coins,
+	})
 end
 
 local function onPlayerRemoving(player: Player)
 	log:info("Player leaving", { userId = player.UserId })
+	readyPlayers[player.UserId] = nil
 	-- RoleService.onPlayerLeave is called inside RoleService via its own
 	-- PlayerRemoving connection (registered in RoleService.init).
 	ProfileService.release(player.UserId)

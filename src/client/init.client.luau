@@ -15,6 +15,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 
+local GameConfig = require(Shared.Config.GameConfig)
 local Logger = require(Shared.Util.Logger)
 local Remotes = require(Shared.Network.Remotes)
 local Types = require(Shared.Types)
@@ -64,17 +65,93 @@ remotes.SendNotification.OnClientEvent:Connect(function(rawPayload: unknown)
 end)
 
 -- ─── Initial profile fetch ────────────────────────────────────────────────────
+--
+-- The server fires ProfileReady only after the DataStore profile has fully
+-- loaded, the session lock has been acquired, and the data has been validated.
+-- We wait for that signal before calling GetProfile to guarantee a non-nil
+-- response and eliminate the loading race condition.
 
--- InvokeServer is safe here: the server's OnServerInvoke returns a read-only
--- snapshot and never changes state based on this call.
-local profile = remotes.GetProfile:InvokeServer()
-if profile ~= nil then
-	local p = profile :: Types.PublicProfile
-	currentRole = p.role
-	currentCoins = p.coins
-	log:info("Profile received", { role = currentRole, coins = currentCoins })
-else
-	log:warn("GetProfile returned nil — profile may still be loading")
+-- Invokes GetProfile with up to PROFILE_FETCH_RETRIES attempts.
+-- Returns true on success, false if all attempts fail.
+local function fetchProfile(): boolean
+	for attempt = 1, GameConfig.PROFILE_FETCH_RETRIES do
+		local ok, result = pcall(function()
+			return remotes.GetProfile:InvokeServer()
+		end)
+
+		if not ok then
+			-- RemoteFunction threw (e.g. server-side error or player kicked).
+			log:warn("GetProfile invocation error", { attempt = attempt, err = tostring(result) })
+			break
+		end
+
+		if result ~= nil then
+			local p = result :: Types.PublicProfile
+			currentRole = p.role
+			currentCoins = p.coins
+			log:info("Profile received", {
+				role = currentRole,
+				coins = currentCoins,
+				attempt = attempt,
+			})
+			return true
+		end
+
+		-- nil result: profile briefly unavailable between ProfileReady and the
+		-- server handler running. Retry after a short delay.
+		if attempt < GameConfig.PROFILE_FETCH_RETRIES then
+			log:debug("GetProfile returned nil; retrying", { attempt = attempt })
+			task.wait(GameConfig.PROFILE_FETCH_RETRY_DELAY)
+		end
+	end
+
+	log:error("GetProfile failed after all retries — profile unavailable", {
+		maxAttempts = GameConfig.PROFILE_FETCH_RETRIES,
+	})
+	return false
+end
+
+-- Wait for ProfileReady with a timeout fallback.
+-- Using a do-block keeps `connection` and `timeoutThread` out of module scope.
+do
+	local connection: RBXScriptConnection? = nil
+	local timeoutThread: thread? = nil
+	local handled = false
+
+	local function onReady()
+		if handled then
+			return
+		end
+		handled = true
+
+		if connection then
+			connection:Disconnect()
+			connection = nil
+		end
+		if timeoutThread then
+			task.cancel(timeoutThread)
+			timeoutThread = nil
+		end
+
+		fetchProfile()
+	end
+
+	-- Connect before setting the timeout so both paths share onReady().
+	connection = remotes.ProfileReady.OnClientEvent:Connect(function()
+		log:debug("ProfileReady received — fetching profile")
+		onReady()
+	end)
+
+	timeoutThread = task.delay(GameConfig.PROFILE_READY_TIMEOUT, function()
+		-- Only fires if the server never sent ProfileReady within the window.
+		-- This handles catastrophic server-side failures gracefully.
+		if not handled then
+			log:warn("ProfileReady not received within timeout; attempting fetch anyway", {
+				timeoutSecs = GameConfig.PROFILE_READY_TIMEOUT,
+			})
+			onReady()
+		end
+	end)
 end
 
 log:info("Client bootstrap complete", { userId = localPlayer.UserId })
