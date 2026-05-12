@@ -23,6 +23,7 @@ local EVENT_NAMES: { string } = {
 	"RoleChanged", --       S → C
 	"SendNotification", --  S → C
 	"AdminResponse", --     S → C
+	"ProfileReady", --      S → C (fired once, after DataStore profile is fully loaded)
 }
 
 local FUNCTION_NAMES: { string } = {
@@ -37,6 +38,7 @@ export type RemoteMap = {
 	RoleChanged: RemoteEvent,
 	SendNotification: RemoteEvent,
 	AdminResponse: RemoteEvent,
+	ProfileReady: RemoteEvent,
 	GetProfile: RemoteFunction,
 	DebugEcho: RemoteFunction,
 }
