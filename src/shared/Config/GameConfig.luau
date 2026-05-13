@@ -42,6 +42,9 @@ export type GameConfigType = {
 	PROFILE_READY_TIMEOUT: number,    -- seconds client waits for ProfileReady before fallback fetch
 	PROFILE_FETCH_RETRIES: number,    -- InvokeServer attempts if nil is returned
 	PROFILE_FETCH_RETRY_DELAY: number, -- seconds between retry attempts
+
+	-- Salary
+	SALARY_INTERVAL: number, -- seconds between server-side salary payments
 }
 
 local GameConfig: GameConfigType = {
@@ -77,6 +80,8 @@ local GameConfig: GameConfigType = {
 	PROFILE_READY_TIMEOUT = 30,     -- generous; DataStore + lock typically < 5 s
 	PROFILE_FETCH_RETRIES = 3,
 	PROFILE_FETCH_RETRY_DELAY = 1,
+
+	SALARY_INTERVAL = 60, -- one payment per minute
 }
 
 return GameConfig

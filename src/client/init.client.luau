@@ -1,14 +1,14 @@
 --!strict
 
--- Client bootstrap — Phase 1.
+-- Client bootstrap — Phase 2.
 --
--- Phase 1 scope: receive authoritative data from the server and hold it in
--- local state. No UI is rendered yet (Phase 2).
+-- Receives authoritative data from the server, renders the RoleHUD,
+-- and routes server events to the HUD for display.
 --
 -- Rules:
 --   • Never mutate game state locally — always request via a RemoteEvent.
 --   • Validate all server payloads before using them.
---   • Keep this file thin; delegate to client-side modules as they are added.
+--   • Keep this file thin; delegate to client-side modules.
 
 local Players = game:GetService("Players")
 
@@ -16,11 +16,13 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 
 local GameConfig = require(Shared.Config.GameConfig)
-local Logger = require(Shared.Util.Logger)
-local Remotes = require(Shared.Network.Remotes)
-local Types = require(Shared.Types)
+local Logger     = require(Shared.Util.Logger)
+local Remotes    = require(Shared.Network.Remotes)
+local Types      = require(Shared.Types)
 
-local log = Logger.new("Client")
+local RoleHUD = require(script.UI.RoleHUD)
+
+local log         = Logger.new("Client")
 local localPlayer = Players.LocalPlayer
 
 -- ─── Remotes ──────────────────────────────────────────────────────────────────
@@ -28,9 +30,13 @@ local localPlayer = Players.LocalPlayer
 -- Blocks until the server has created all remote instances.
 local remotes = Remotes.client()
 
+-- ─── HUD ─────────────────────────────────────────────────────────────────────
+
+local hud = RoleHUD.init(remotes)
+
 -- ─── Local state (presentation layer only — server is authoritative) ──────────
 
-local currentRole: string = "civilian"
+local currentRole: string  = "civilian"
 local currentCoins: number = 0
 
 -- ─── RoleChanged ──────────────────────────────────────────────────────────────
@@ -46,8 +52,8 @@ remotes.RoleChanged.OnClientEvent:Connect(function(rawPayload: unknown)
 		return
 	end
 	currentRole = payload.role
+	hud:updateRole(currentRole)
 	log:info("Role updated", { role = currentRole })
-	-- Phase 2: RoleHUD:update(currentRole)
 end)
 
 -- ─── SendNotification ─────────────────────────────────────────────────────────
@@ -60,7 +66,17 @@ remotes.SendNotification.OnClientEvent:Connect(function(rawPayload: unknown)
 	if typeof(payload.message) ~= "string" then
 		return
 	end
-	-- Phase 2: ToastSystem:show(payload)
+
+	-- Also refresh coin label when a salary notification arrives.
+	-- The authoritative balance is fetched via GetProfile; this is best-effort.
+	local msg = payload.message
+	local paid = msg:match("balance: (%d+)")
+	if paid then
+		currentCoins = tonumber(paid) or currentCoins
+		hud:updateCoins(currentCoins)
+	end
+
+	hud:showNotification(payload)
 	log:info("Notification", { kind = payload.kind, message = payload.message })
 end)
 
@@ -87,11 +103,13 @@ local function fetchProfile(): boolean
 
 		if result ~= nil then
 			local p = result :: Types.PublicProfile
-			currentRole = p.role
+			currentRole  = p.role
 			currentCoins = p.coins
+			hud:updateRole(currentRole)
+			hud:updateCoins(currentCoins)
 			log:info("Profile received", {
-				role = currentRole,
-				coins = currentCoins,
+				role   = currentRole,
+				coins  = currentCoins,
 				attempt = attempt,
 			})
 			return true
@@ -112,7 +130,6 @@ local function fetchProfile(): boolean
 end
 
 -- Wait for ProfileReady with a timeout fallback.
--- Using a do-block keeps `connection` and `timeoutThread` out of module scope.
 do
 	local connection: RBXScriptConnection? = nil
 	local timeoutThread: thread? = nil
@@ -136,15 +153,12 @@ do
 		fetchProfile()
 	end
 
-	-- Connect before setting the timeout so both paths share onReady().
 	connection = remotes.ProfileReady.OnClientEvent:Connect(function()
 		log:debug("ProfileReady received — fetching profile")
 		onReady()
 	end)
 
 	timeoutThread = task.delay(GameConfig.PROFILE_READY_TIMEOUT, function()
-		-- Only fires if the server never sent ProfileReady within the window.
-		-- This handles catastrophic server-side failures gracefully.
 		if not handled then
 			log:warn("ProfileReady not received within timeout; attempting fetch anyway", {
 				timeoutSecs = GameConfig.PROFILE_READY_TIMEOUT,
